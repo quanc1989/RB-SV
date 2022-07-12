@@ -33,11 +33,22 @@ Detailed information was described as follows.
         --sort --bam-index BAI -j $NTHREADS -J $NTHREADS --median-filter
     ```
    
-3. For each sample, SV was detected simultaneously using Sniffles, pbsv and SVIM. All these softwares were adapted with Minimap and Pbmm. For each SV signature, a length of 50 bp and at least 5 supporting-reads are required. Each tool is required to record sequences of insertions and ID of supporting-reads.
+3. For each sample, SV was detected simultaneously using Sniffles, cuteSV and SVIM. In addition, pbsv was used to detect SVs from PacBio data instead of cuteSV. For each SV signature, a length of 50 bp and at least 5 supporting-reads are required. Each tool is required to record sequences of insertions and ID of supporting-reads.
 
    ```shell
       sniffles -s 5 -t $NTHREADS -l 50 -n -1 \
         -m $PATH_TO_SAVE_DATA/$RESULT_SORTED_BAM -v $PATH_TO_SAVE_DATA/$RESULT_VCF_SNIFFLES
+   ```
+
+   ```shell
+        cuteSV --threads $NTHREADS \
+          --sample $SAMPLEID \
+          --min_support 5 \
+          --report_readid \
+          --genotype --min_size 50 \
+          --max_cluster_bias_INS 100 \
+          --diff_ratio_merging_INS 0.3 --max_cluster_bias_DEL 100 --diff_ratio_merging_DEL 0.3 \
+          $PATH_TO_SAVE_DATA/$RESULT_SORTED_BAM $PATH_REFERENCE_FASTA $PATH_TO_SAVE_DATA/$RESULT_VCF_CUTESV $PATH_TO_SAVE_DATA/
    ```
 
    ```shell
@@ -66,17 +77,59 @@ Detailed information was described as follows.
       bcftools view -i 'QUAL >= 10 & SUPPORT >= 5' $PATH_TO_SAVE_DATA/variants.vcf > $PATH_TO_SAVE_DATA/$RESULT_VCF_SVIM
    ```
    
-4. 对于每一个样本，使用SURVIVOR合并三种方法检测到的SV，要求每个SV至少被两种软件检测到，并且相邻的SV之间要间隔1kbp以上。在同一个位置，不同软件检测到的SV不需要有一致的类型，也不需要有相同的方向，这是为了确保我们获取到尽可能多的高置信度的断点区域。最后使用SURVIVOR合并4个样本检测到的断点集合，每个断点必须至少有一个样本支持。
-5. 最后，我们需要得到一个有完整分型的多样本数据集。 我们在所有这些潜在断点区域，对每一个样本重新运行 Sniffles进行SV的分型，然后使用 SURVIVOR合并在一起。 这一次，我们要求 SURVIVOR 只报告至少一个样本支持的 SV，而且必须有相同的SV类型。 此外，我们仍然使用了一个五个最小支持读段的硬阈值，并且所有小于该阈值的非缺失基因型都被修改为ref（0/0）。
-6. 我们构建了Ensembl Canonical transcript for GRCh38，然后使用GATK中的svtk工具对所有SV所处的区域进行了注释。
+4. For each sample, SVs detected by above three methods were combined using SURVIVOR, requiring that each SV be detected by at least two tools and that adjacent SVs be separated by more than 1 kbp. The SVs detected by different software around the same location do not need to have the same SVtype or the same orientation, which is to obtain as many breakpoints with high confidence as possible. Finally breakpoints detected by all samples are merged using SURVIVOR and each breakpoint must be supported by at least one sample.
+
+   ```shell
+     for sampleID in $(ls $PATH_TO_SAVE_DATA); do   
+         SURVIVOR merge $PATH_TO_SAVE_DATA/$SAMPLEID/LIST_MERGE_METHOD 1000 2 1 1 0 50 $PATH_TO_SAVE_DATA/$SAMPLEID/$SAMPLEID_VCF_MERGE_METHOD
+     done
+   
+     SURVIVOR merge $PATH_TO_SAVE_DATA/LIST_MERGE_SAMPLE 1000 1 1 0 0 50 $PATH_TO_SAVE_DATA/$RESULT_VCF_MERGE_SAMPLE
+   ```
+5. Finally, we need to get a multi-sample vcf with complete genotypes. We re-run Sniffles and genotyped for each sample in all these potential breakpoints and then merge them using SURVIVOR. In this run, SURVIVOR only report SVs supported by at least one sample, and must have the same SVtype. In addition, we used a hard threshold of five supporting-reads, and all breakpoints smaller than this threshold were modified to ref (0/0).
+   
+   ```shell
+    sniffles -s 5 -t $NTHREADS -l 50 -n -1 \
+      -m $PATH_TO_SAVE_DATA/$RESULT_SORTED_BAM \
+      -v $PATH_TO_SAVE_DATA/$RESULT_VCF_FORCE \
+      --Ivcf $PATH_TO_SAVE_DATA/$RESULT_VCF_MERGE_SAMPLE
+   ```
+   
+   ```shell
+    SURVIVOR merge $PATH_TO_SAVE_DATA/LIST_MERGE_SAMPLE 1000 -1 1 1 0 50 $PATH_TO_SAVE_DATA/$RESULT_VCF_MERGE_SAMPLE_FORCE
+   ```
+
+6. We constructed the Ensembl Canonical transcript for GRCh38 and then annotated all regions where SVs are located using svtk in GATK.
+
+   ```shell
+      svtk annotate --gencode $GENCODE_GRCH38_CANONICAL_ANNOTATION_GTF \
+        $PATH_TO_SAVE_DATA/$RESULT_VCF_FORCE $PATH_TO_SAVE_DATA/$RESULT_VCF_FORCE_SVTK
+   ```
+   
 7. 使用AnnotSV对所有SV进行了全面的注释，并且使用KnotAnnotSV对注释内容进行了可视化，便于查看。
 
-![图1. SV检测流程。](plots/pipeline-sv-calling.png)
+   ```shell
+      AnnotSV -SVinputFile $PATH_TO_SAVE_DATA/$RESULT_VCF_FORCE_SVTK \
+        -outputDir $PATH_TO_SAVE_DATA/ \
+        -outputFile $RESULT_ANNOTSV_TSV \
+        -promoterSize 2000 \
+        -overlap 50 \
+        -genomeBuild GRCh38 \
+        -annotationMode full
+   
+      perl knotAnnotSV.pl \
+        --configFile CONFIG_ANNOTSV_YAML \
+        --annotSVfile $PATH_TO_SAVE_DATA/$RESULT_ANNOTSV_TSV \
+        --outDir $PATH_TO_SAVE_DATA/ \
+        --outPrefix $PATH_TO_SAVE_DATA/$RESULT_ANNOTSV_TSV \
+        --genomeBuild hg38
+   ```
+   
+![Fig1. pipline](plots/pipeline-sv-calling.png)
 
-图1. SV检测流程。
 
 
-## Software versions
+## Environments
 
 | Softwares   | Version    |
 |-------------|------------|
