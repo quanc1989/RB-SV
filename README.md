@@ -106,7 +106,7 @@ Detailed information was described as follows.
         $PATH_TO_SAVE_DATA/$RESULT_VCF_FORCE $PATH_TO_SAVE_DATA/$RESULT_VCF_FORCE_SVTK
    ```
    
-7. 使用AnnotSV对所有SV进行了全面的注释，并且使用KnotAnnotSV对注释内容进行了可视化，便于查看。
+7. All SVs were fully annotated using AnnotSV and the annotation was visualized using KnotAnnotSV.
 
    ```shell
       AnnotSV -SVinputFile $PATH_TO_SAVE_DATA/$RESULT_VCF_FORCE_SVTK \
